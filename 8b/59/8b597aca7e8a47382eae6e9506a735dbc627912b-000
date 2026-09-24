@@ -1,0 +1,47 @@
+# 2026-09-24 : lookdev cyclorama (infinity cove): floor, quarter-circle cove, back wall, UVs in metres, FBX for Unreal.
+# Run in Houdini (hom or hython). A cove has no visible corner behind the subject, so the key light falls off softly.
+# FR : cyclorama de lookdev ; la gorge courbe supprime l'arete derriere l'objet.
+import hou, os
+OUT = '/Users/zenray/Create/Build/Productions/ZenRayShards/SourceAssets/LookDev'
+PY = '''
+import math
+P = {'depth_m': 18.0, 'width_m': 16.0, 'radius_m': 3.0, 'wall_m': 7.0, 'arc_seg': 32, 'width_div': 32, 'floor_seg': 10, 'wall_seg': 8}
+geo = hou.pwd().geometry()
+z0 = P['depth_m'] / 2.0; zc = -P['depth_m'] / 2.0 + P['radius_m']
+prof = [(0.0, z0 - (z0 - zc) * i / P['floor_seg']) for i in range(P['floor_seg'] + 1)]
+for i in range(1, P['arc_seg'] + 1):
+    a = math.pi / 2 * i / P['arc_seg']
+    prof.append((P['radius_m'] * (1 - math.cos(a)), zc - P['radius_m'] * math.sin(a)))
+for i in range(1, P['wall_seg'] + 1):
+    prof.append((P['radius_m'] + (P['wall_m'] - P['radius_m']) * i / P['wall_seg'], -P['depth_m'] / 2.0))
+arc = [0.0]
+for i in range(1, len(prof)):
+    arc.append(arc[-1] + math.hypot(prof[i][0] - prof[i-1][0], prof[i][1] - prof[i-1][1]))
+uv = geo.addAttrib(hou.attribType.Vertex, 'uv', (0.0, 0.0, 0.0))
+nx = P['width_div'] + 1
+pts = []
+for j, (y, z) in enumerate(prof):
+    for i in range(nx):
+        p = geo.createPoint(); p.setPosition((-P['width_m'] / 2 + P['width_m'] * i / P['width_div'], y, z)); pts.append(p)
+for j in range(len(prof) - 1):
+    for i in range(P['width_div']):
+        poly = geo.createPolygon()
+        for (jj, ii) in ((j, i), (j, i + 1), (j + 1, i + 1), (j + 1, i)):
+            v = poly.addVertex(pts[jj * nx + ii]); v.setAttribValue(uv, (P['width_m'] * ii / P['width_div'], arc[jj], 0.0))
+'''
+def build():
+    os.makedirs(OUT, exist_ok=True)
+    old = hou.node('/obj/SM_LD_Cyclorama')
+    if old: old.destroy()
+    g = hou.node('/obj').createNode('geo', 'SM_LD_Cyclorama')
+    py = g.createNode('python'); py.parm('python').set(PY)
+    # Unreal saw the back faces (black background, no floor shadow): reverse the winding here, at the source.
+    # FR : Unreal voyait l'envers des faces ; on inverse l'ordre des sommets a la source, pas avec un materiau double face.
+    rev = g.createNode('reverse'); rev.setInput(0, py)
+    n = g.createNode('normal'); n.setInput(0, rev); n.setDisplayFlag(True); n.setRenderFlag(True)
+    rop = hou.node('/out').node('fbx_SM_LD_Cyclorama') or hou.node('/out').createNode('filmboxfbx', 'fbx_SM_LD_Cyclorama')
+    rop.parm('startnode').set(g.path()); rop.parm('sopoutput').set(f'{OUT}/SM_LD_Cyclorama.fbx'); 
+    # metres to Unreal centimetres, or the mesh lands 100 times too small / FR : sinon 100 fois trop petit
+    rop.parm('convertunits').set(1); rop.render()
+    return len(n.geometry().prims())
+print(build())

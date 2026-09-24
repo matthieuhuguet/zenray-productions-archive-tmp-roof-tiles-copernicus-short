@@ -1,0 +1,181 @@
+# 2026-09-24 : lookdev stage for L_LookDev_RoofTilesV2: cyclorama, three-point lighting, turntable (subject turns,
+# camera and lights fixed), 9:16 render. Run step by step through the queue: stage.run('cyclorama') and so on.
+# FR : plateau de lookdev ; cyclorama, eclairage trois points, turntable (l'objet tourne, camera et lumieres fixes).
+import unreal, math
+
+SRC = '/Users/zenray/Create/Build/Productions/ZenRayShards/SourceAssets/LookDev'
+MESHES = '/Game/ZenRayShards/Meshes/LookDev'
+MATS = '/Game/ZenRayShards/Materials/LookDev'
+SEQ_PATH, SEQ_NAME = '/Game/ZenRayShards/Cinematics', 'LS_RoofTilesV2_Turn'
+# One dictionary drives the whole stage (HDA law). Angles are yaw around the subject, 0 = camera side.
+# FR : un seul dictionnaire pilote le plateau ; angles = lacet autour du sujet, 0 = cote camera.
+S = {
+    'subject': 'LD_Cube', 'subject_center_z': 100.0,
+    'cyclo_color': (0.12, 0.12, 0.125), 'cyclo_rough': 0.85, 'cyclo_wall_behind_cm': 450.0,
+    'cam_dist_cm': 1000.0, 'cam_height_cm': 190.0, 'cam_aim_z_cm': 100.0, 'cam_vfov_deg': 34.0,  # 9:16: horizontal FOV is only ~19.5 deg, the 2.83 m diagonal of the turning cube needs ~10 m
+    'width': 1440, 'height': 2560, 'temporal_samples': 16, 'nanite_pixels_per_edge': 0.5,  # 2K vertical, high quality 'fps': 30, 'seconds': 10, 'turns': 1.0, 'start_yaw': 45.0,
+    # three-point: key (warm, strong, high side), fill (cool, soft, other side), rim (behind, outlines the silhouette)
+    'key':  {'yaw': 50.0,  'pitch': -35.0, 'dist': 420.0, 'intensity': 38.0, 'color': (1.0, 0.86, 0.72), 'size': 140.0},
+    'fill': {'yaw': -60.0, 'pitch': -12.0, 'dist': 480.0, 'intensity': 7.0,  'color': (0.72, 0.82, 1.0), 'size': 260.0},
+    'rim':  {'yaw': 165.0, 'pitch': -30.0, 'dist': 380.0, 'intensity': 55.0, 'color': (1.0, 0.95, 0.9), 'size': 90.0},
+    'sky_intensity': 0.25, 'out_dir': '/Users/zenray/.claude/tmp/tmp-short-roof-tiles-copernicus/02-unreal-turntable/frames',
+}
+eal = unreal.EditorAssetLibrary; mel = unreal.MaterialEditingLibrary
+eas = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+tools = unreal.AssetToolsHelpers.get_asset_tools()
+
+
+def actor(label):
+    return next((a for a in eas.get_all_level_actors() if a.get_actor_label() == label), None)
+
+
+def cam_axis():
+    # camera sits on +X of the subject, looking toward -X / FR : la camera est en +X du sujet
+    return unreal.Vector(1, 0, 0)
+
+
+def cyclorama():
+    t = unreal.AssetImportTask(); t.filename = f'{SRC}/SM_LD_Cyclorama.fbx'; t.destination_path = MESHES
+    t.destination_name = 'SM_LD_Cyclorama'; t.automated = True; t.replace_existing = True; t.save = True
+    ui = unreal.FbxImportUI(); ui.import_materials = False; ui.import_textures = False
+    ui.static_mesh_import_data.combine_meshes = True; t.options = ui
+    tools.import_asset_tasks([t])
+    mesh = eal.load_asset(f'{MESHES}/SM_LD_Cyclorama')
+    mpath = f'{MATS}/M_LD_Cyclorama'
+    if eal.does_asset_exist(mpath): eal.delete_asset(mpath)
+    mat = tools.create_asset('M_LD_Cyclorama', MATS, unreal.Material, unreal.MaterialFactoryNew())
+    c = mel.create_material_expression(mat, unreal.MaterialExpressionConstant3Vector, -400, 0)
+    c.set_editor_property('constant', unreal.LinearColor(*S['cyclo_color'], 1.0))
+    r = mel.create_material_expression(mat, unreal.MaterialExpressionConstant, -400, 200); r.set_editor_property('r', S['cyclo_rough'])
+    mel.connect_material_property(c, '', unreal.MaterialProperty.MP_BASE_COLOR)
+    mel.connect_material_property(r, '', unreal.MaterialProperty.MP_ROUGHNESS)
+    mel.recompile_material(mat); eal.save_loaded_asset(mat)
+    mesh.set_material(0, mat); eal.save_loaded_asset(mesh)
+    # where is the wall? average the horizontal position of the highest vertices / FR : ou est le mur ?
+    md = mesh.get_static_mesh_description(0)
+    hi = [md.get_vertex_position(unreal.VertexID(i)) for i in range(md.get_vertex_count())]
+    # Mesh description positions are raw FBX units (metres here), bounds are centimetres: threshold is relative.
+    # FR : la mesh description est en unites FBX brutes, les bornes en cm : seuil relatif.
+    top = max(p.z for p in hi); bot = min(p.z for p in hi); wall = [p for p in hi if p.z > top - 0.05 * (top - bot)]
+    wx = sum(p.x for p in wall) / len(wall); wy = sum(p.y for p in wall) / len(wall)
+    wall_yaw = math.degrees(math.atan2(wy, wx))           # direction of the wall in mesh space
+    yaw = 180.0 - wall_yaw                                   # turn it so the wall lies on -X (behind the subject)
+    ext = mesh.get_bounds().box_extent
+    half = ext.x if abs(math.cos(math.radians(wall_yaw))) > 0.7 else ext.y
+    a = actor('LD_Cyclorama') or eas.spawn_actor_from_object(mesh, unreal.Vector(0, 0, 0))
+    a.set_actor_label('LD_Cyclorama'); a.static_mesh_component.set_static_mesh(mesh)
+    a.set_actor_rotation(unreal.Rotator(0, 0, yaw), False)
+    # slide it so the wall stands cyclo_wall_behind_cm behind the subject / FR : recule le mur derriere le sujet
+    a.set_actor_location(unreal.Vector(half - S['cyclo_wall_behind_cm'], 0, 0), False, False)
+    return {'wall_mesh_dir_deg': round(wall_yaw, 1), 'actor_yaw': round(yaw, 1), 'half_depth_cm': round(half), 'verts': len(hi), 'bounds': [round(ext.x), round(ext.y), round(ext.z)]}
+
+
+def _light(label, cfg):
+    a = actor(label) or eas.spawn_actor_from_class(unreal.RectLight, unreal.Vector(0, 0, 0))
+    a.set_actor_label(label)
+    yaw = math.radians(cfg['yaw']); pitch = math.radians(-cfg['pitch'])
+    c = unreal.Vector(0, 0, S['subject_center_z'])
+    pos = unreal.Vector(c.x + cfg['dist'] * math.cos(pitch) * math.cos(yaw), c.y + cfg['dist'] * math.cos(pitch) * math.sin(yaw), c.z + cfg['dist'] * math.sin(pitch))
+    rot = unreal.MathLibrary.find_look_at_rotation(pos, c)
+    a.set_actor_location_and_rotation(pos, rot, False, False)
+    lc = a.light_component
+    lc.set_mobility(unreal.ComponentMobility.MOVABLE)
+    lc.set_intensity_units(unreal.LightUnits.CANDELAS) if hasattr(lc, 'set_intensity_units') else None
+    lc.set_intensity(cfg['intensity']); lc.set_light_color(unreal.LinearColor(*cfg['color'], 1.0))
+    lc.set_editor_property('source_width', cfg['size']); lc.set_editor_property('source_height', cfg['size'])
+    lc.set_editor_property('attenuation_radius', 3000.0)
+    return label
+
+
+def ground_subject():
+    # The dense Houdini cube has its pivot at the base: the actor sits at z 0. / FR : pivot a la base, acteur a z 0.
+    a = actor(S['subject']); p = a.get_actor_location(); a.set_actor_location(unreal.Vector(p.x, p.y, 0.0), False, False)
+    o, e = a.get_actor_bounds(False); return [round(o.z - e.z), round(o.z + e.z)]
+
+
+def lights():
+    for label in ('LD_Sun', 'LD_SkyAtmosphere'):
+        a = actor(label)
+        if a: a.set_is_temporarily_hidden_in_editor(True); a.set_actor_hidden_in_game(True)
+        if a and hasattr(a, 'light_component'): a.light_component.set_visibility(False)
+    sun = actor('LD_Sun')
+    if sun: sun.light_component.set_intensity(0.0)
+    sl = actor('LD_SkyLight')
+    if sl: sl.light_component.set_intensity(S['sky_intensity'])
+    plane = actor('LD_Plane')
+    if plane: plane.set_actor_hidden_in_game(True); plane.set_is_temporarily_hidden_in_editor(True)
+    return [_light('LD_Key', S['key']), _light('LD_Fill', S['fill']), _light('LD_Rim', S['rim'])]
+
+
+def camera():
+    cam = actor('LD_TurnCam') or eas.spawn_actor_from_class(unreal.CineCameraActor, unreal.Vector(0, 0, 0))
+    cam.set_actor_label('LD_TurnCam')
+    pos = unreal.Vector(S['cam_dist_cm'], 0, S['cam_height_cm'])
+    rot = unreal.MathLibrary.find_look_at_rotation(pos, unreal.Vector(0, 0, S['cam_aim_z_cm']))
+    cam.set_actor_location_and_rotation(pos, rot, False, False)
+    cine = cam.get_cine_camera_component(); fb = cine.get_editor_property('filmback')
+    fb.sensor_height = 23.76; fb.sensor_width = 23.76 * S['width'] / S['height']; cine.set_editor_property('filmback', fb)
+    cine.set_editor_property('current_focal_length', fb.sensor_height / (2.0 * math.tan(math.radians(S['cam_vfov_deg'] / 2.0))))
+    fs = cine.get_editor_property('focus_settings'); fs.focus_method = unreal.CameraFocusMethod.DISABLE; cine.set_editor_property('focus_settings', fs)
+    return cam
+
+
+def sequence():
+    cam = camera(); subj = actor(S['subject'])
+    path = f'{SEQ_PATH}/{SEQ_NAME}'
+    if eal.does_asset_exist(path): eal.delete_asset(path)
+    seq = tools.create_asset(SEQ_NAME, SEQ_PATH, unreal.LevelSequence, unreal.LevelSequenceFactoryNew())
+    seq.set_display_rate(unreal.FrameRate(S['fps'], 1)); end = S['fps'] * S['seconds']
+    seq.set_playback_start(0); seq.set_playback_end(end)
+    cb = seq.add_possessable(cam)
+    cut = seq.add_track(unreal.MovieSceneCameraCutTrack); cs = cut.add_section(); cs.set_range(0, end)
+    cs.set_camera_binding_id(unreal.MovieSceneSequenceExtensions.get_binding_id(seq, cb))
+    sb = seq.add_possessable(subj); tr = sb.add_track(unreal.MovieScene3DTransformTrack)
+    sec = tr.add_section(); sec.set_range(0, end); ch = sec.get_all_channels()
+    loc = subj.get_actor_location(); sc = subj.get_actor_scale3d()
+    for f in (0, end):  # linear yaw keys: constant turning speed, no ease / FR : vitesse constante
+        yaw = S['start_yaw'] + 360.0 * S['turns'] * f / end
+        for c, v in zip(ch[:9], (loc.x, loc.y, loc.z, 0.0, 0.0, yaw, sc.x, sc.y, sc.z)):
+            c.add_key(unreal.FrameNumber(f), v, interpolation=unreal.MovieSceneKeyInterpolation.LINEAR)
+    eal.save_asset(path)
+    unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).save_current_level()
+    return path
+
+
+def still(path):
+    cam = camera()
+    unreal.AutomationLibrary.take_high_res_screenshot(540, 960, path, cam)
+    return path
+
+
+def render(start=None, end=None, out_dir=None):
+    world = unreal.EditorLevelLibrary.get_editor_world()
+    sub = unreal.get_editor_subsystem(unreal.MoviePipelineQueueSubsystem)
+    queue = sub.get_queue(); queue.delete_all_jobs()
+    job = queue.allocate_new_job(unreal.MoviePipelineExecutorJob)
+    job.sequence = unreal.SoftObjectPath(f'{SEQ_PATH}/{SEQ_NAME}')
+    job.map = unreal.SoftObjectPath(world.get_path_name().split('.')[0] + '.' + world.get_name())
+    cfg = job.get_configuration()
+    out = cfg.find_or_add_setting_by_class(unreal.MoviePipelineOutputSetting)
+    out.output_resolution = unreal.IntPoint(S['width'], S['height']); out.output_directory = unreal.DirectoryPath(out_dir or S['out_dir'])
+    if start is not None:  # test renders: a few frames only / FR : rendu test de quelques images
+        out.use_custom_playback_range = True; out.custom_start_frame = start; out.custom_end_frame = end
+    out.file_name_format = 'roof_turn_{frame_number}'; out.override_existing_output = True
+    cfg.find_or_add_setting_by_class(unreal.MoviePipelineDeferredPassBase)
+    cfg.find_or_add_setting_by_class(unreal.MoviePipelineImageSequenceOutput_PNG)
+    aa = cfg.find_or_add_setting_by_class(unreal.MoviePipelineAntiAliasingSetting)
+    aa.spatial_sample_count = 1; aa.temporal_sample_count = S['temporal_samples']
+    aa.override_anti_aliasing = True; aa.anti_aliasing_method = unreal.AntiAliasingMethod.AAM_NONE  # MRQ accumulation replaces TAA
+    # Cinematic quality: max scalability, fully streamed textures, no LOD bias. / FR : qualite cine forcee.
+    go = cfg.find_or_add_setting_by_class(unreal.MoviePipelineGameOverrideSetting)
+    go.cinematic_quality_settings = True; go.texture_streaming = unreal.MoviePipelineTextureStreamingMethod.FULLY_LOAD
+    go.use_lod_zero = True; go.disable_hlo_ds = True
+    cv = cfg.find_or_add_setting_by_class(unreal.MoviePipelineConsoleVariableSetting)
+    cv.add_or_update_console_variable('r.Nanite.MaxPixelsPerEdge', S['nanite_pixels_per_edge'])  # finer tessellation dicing
+    sub.render_queue_with_executor(unreal.MoviePipelinePIEExecutor)
+    return out_dir or S['out_dir']
+
+
+def run(step, *args):
+    r = {'ground': ground_subject, 'cyclorama': cyclorama, 'lights': lights, 'sequence': sequence, 'still': still, 'render': render}[step](*args)
+    print(step, r); return r

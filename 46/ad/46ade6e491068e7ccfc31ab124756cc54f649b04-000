@@ -1,0 +1,36 @@
+# 2026-09-24 : dense lookdev meshes for Nanite displacement in Unreal (run in Houdini, hom or hython).
+# A 2-triangle face never dices enough for tessellation to show the tiles. / FR : un cube de 12 triangles ne se deplace jamais.
+import hou, os
+OUT = '/Users/zenray/Create/Build/Productions/ZenRayShards/SourceAssets/LookDev'
+P = {'cube_m': 2.0, 'cube_div': 96, 'plane_m': 4.0, 'plane_div': 192}
+# Box projection per face, 1 UV = cube_m metres, so cube and plane share the same texel density.
+UV = '''
+vector n = abs(prim_normal(0, @primnum, {0.5, 0.5}));
+vector p = (@P - getbbox_center(0)) / chf("size") + 0.5;
+vector2 uv = n.x >= n.y && n.x >= n.z ? set(p.z, p.y) : (n.y >= n.z ? set(p.x, p.z) : set(p.x, p.y));
+v@uv = set(uv.x, uv.y, 0) * chf("repeat");
+'''
+def build():
+    os.makedirs(OUT, exist_ok=True)
+    for name, kind in (('SM_LD_CubeDense', 'cube'), ('SM_LD_PlaneDense', 'plane')):
+        old = hou.node('/obj/' + name)
+        if old: old.destroy()
+        g = hou.node('/obj').createNode('geo', name)
+        if kind == 'cube':
+            s = g.createNode('box'); s.parm('type').set('polymesh'); s.parm('scale').set(P['cube_m'])
+            for a in ('divsx', 'divsy', 'divsz'): s.parm(a).set(P['cube_div'])
+            s.parm('ty').set(P['cube_m'] / 2); size, rep = P['cube_m'], 1.0
+        else:
+            s = g.createNode('grid'); s.parmTuple('size').set((P['plane_m'], P['plane_m']))
+            s.parm('rows').set(P['plane_div']); s.parm('cols').set(P['plane_div'])
+            size, rep = P['plane_m'], P['plane_m'] / P['cube_m']
+        w = g.createNode('attribwrangle'); w.setInput(0, s); w.parm('class').set('vertex'); w.parm('snippet').set(UV)
+        w.addSpareParmTuple(hou.FloatParmTemplate('size', 'Size', 1, default_value=(size,)))
+        w.addSpareParmTuple(hou.FloatParmTemplate('repeat', 'Repeat', 1, default_value=(rep,)))
+        n = g.createNode('normal'); n.setInput(0, w); n.setDisplayFlag(True); n.setRenderFlag(True)
+        rop = hou.node('/out').createNode('filmboxfbx', 'fbx_' + name)
+        rop.parm('startnode').set(g.path()); rop.parm('sopoutput').set(f'{OUT}/{name}.fbx'); 
+    # metres to Unreal centimetres, or the mesh lands 100 times too small / FR : sinon 100 fois trop petit
+        rop.parm('convertunits').set(1); rop.render()
+        print(name, len(n.geometry().prims()), 'prims')
+build()

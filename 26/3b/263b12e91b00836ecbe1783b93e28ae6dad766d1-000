@@ -1,0 +1,27 @@
+# Short : toit de tuiles Copernicus, du graphe au lookdev Unreal (kit prepare le 2026-09-24)
+
+Format de sortie (Shorts1.md) : **4:5 4K, 3072 x 3840**, style **V4** (`zenray-houdini/short-editor-v4/`),
+titre GT Sectra Bold x1.25, sous-titres Archive Garamond Bold Italic, **en anglais, dans les mots de
+Matthieu** : les textes restent a ecrire par lui (cases entre crochets).
+
+## Les plans disponibles
+
+| Fichier | Contenu | Duree | Taille |
+|---|---|---|---|
+| `01-houdini-layers/layers_viewer_2x.mov` | la texture se construit : hauteur, 74 details, couleur, rugosite, normale, AO | 42,5 s | 1260 carre |
+| `01-houdini-layers/layers_viewer_1x.mov` | meme plan a vitesse reelle | 85 s | 1260 carre |
+| `01-houdini-layers/layers_full_window.mov` | Houdini entier : graphe range par familles + vue, noeud courant surligne | 85 s | 2560 x 1540 |
+| `02-unreal-turntable/roof_turntable_2k.mov` | cube tourne sur cyclorama, trois points, displacement Nanite 8 cm | 10 s | 1440 x 2560 |
+| `03-stills/` | cartes finales, lookdev Karma V6, planche ref/nous, Unreal 8 cm et 60 cm, reference Pablo Blanes, capture du graphe | | |
+
+## Proposition de montage (a valider)
+
+| Temps | Plan | Texte (Matthieu) |
+|---|---|---|
+| 0 - 2 s | reference `pablo-blanes-render-01.jpg` puis coupe sur le cube Unreal | [accroche] |
+| 2 - 5 s | `layers_full_window.mov`, 716 noeuds, familles | [le graphe] |
+| 5 - 14 s | `layers_viewer_2x.mov`, la texture se construit | [les details] |
+| 14 - 18 s | `lookdev_unreal_mma_60cm.png` puis 8 cm : le relief sort du cube | [displacement] |
+| 18 - 28 s | `roof_turntable_2k.mov` | [chute] |
+
+Background V4 propose : **rouge** `red_layer_02` (tuiles terre cuite). Audio : a choisir.

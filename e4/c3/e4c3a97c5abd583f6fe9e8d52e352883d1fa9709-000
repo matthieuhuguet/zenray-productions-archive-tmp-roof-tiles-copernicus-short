@@ -1,0 +1,113 @@
+# 2026-09-24 : import the Copernicus roof tiles V2 textures into ZenRayShards and build a lookdev level.
+# Run through the queue bridge (~/.claude/tmp/tmp-unreal-queue). Everything lives in /Game/ZenRayShards (I-02).
+# FR : importe les textures du toit V2 et construit un niveau de lookdev dans ZenRayShards.
+import unreal
+
+SRC = '/Users/zenray/Downloads/materials-copernicus-exercize/textures'
+DEST = '/Game/ZenRayShards/Materials/RoofTilesV2'
+LEVEL = '/Game/ZenRayShards/Levels/L_LookDev_RoofTilesV2'
+MAPS = {  # file -> (asset name, sRGB, compression)
+    'V2_basecolor.png': ('T_RoofTilesV2_BaseColor', True, unreal.TextureCompressionSettings.TC_DEFAULT),
+    'V2_normal.png': ('T_RoofTilesV2_Normal', False, unreal.TextureCompressionSettings.TC_NORMALMAP),
+    'V2_roughness.png': ('T_RoofTilesV2_Roughness', False, unreal.TextureCompressionSettings.TC_GRAYSCALE),
+    'V2_ao.png': ('T_RoofTilesV2_AO', False, unreal.TextureCompressionSettings.TC_GRAYSCALE),
+    'V2_height.png': ('T_RoofTilesV2_Height', False, unreal.TextureCompressionSettings.TC_GRAYSCALE),
+}
+L = {'disp_cm': 8.0, 'disp_center': 0.42, 'exposure_ev100': 11.0, 'cube_scale': 2.0, 'plane_scale': 4.0, 'plane_x': 350.0, 'uv_tiling': 1.0, 'sun_pitch': -28.0, 'sun_yaw': 130.0, 'sun_lux': 8.0}
+
+tools = unreal.AssetToolsHelpers.get_asset_tools()
+eal = unreal.EditorAssetLibrary
+mel = unreal.MaterialEditingLibrary
+
+# 1. textures, re-importable (replace existing)
+tasks = []
+for f, (name, srgb, comp) in MAPS.items():
+    t = unreal.AssetImportTask()
+    t.filename = f'{SRC}/{f}'; t.destination_path = DEST; t.destination_name = name
+    t.replace_existing = True; t.automated = True; t.save = True
+    tasks.append(t)
+tools.import_asset_tasks(tasks)
+tex = {}
+for f, (name, srgb, comp) in MAPS.items():
+    a = eal.load_asset(f'{DEST}/{name}')
+    a.set_editor_property('srgb', srgb); a.set_editor_property('compression_settings', comp)
+    eal.save_loaded_asset(a); tex[name] = a
+print('textures', list(tex))
+
+# 2. material. A texture without sRGB needs LINEAR samplers, or the material fails and Unreal uses the default one.
+# FR : texture sans sRGB = echantillonneur LINEAIRE, sinon le materiau echoue en silence.
+mpath = f'{DEST}/M_RoofTilesV2'
+if eal.does_asset_exist(mpath): eal.delete_asset(mpath)
+mat = tools.create_asset('M_RoofTilesV2', DEST, unreal.Material, unreal.MaterialFactoryNew())
+def sample(name, x, y, stype):
+    s = mel.create_material_expression(mat, unreal.MaterialExpressionTextureSampleParameter2D, x, y)
+    s.set_editor_property('texture', tex[name]); s.set_editor_property('sampler_type', stype)
+    s.set_editor_property('parameter_name', name.replace('T_RoofTilesV2_', ''))
+    return s
+bc = sample('T_RoofTilesV2_BaseColor', -900, -200, unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
+rg = sample('T_RoofTilesV2_Roughness', -900, 50, unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
+nm = sample('T_RoofTilesV2_Normal', -900, 300, unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL)
+ao = sample('T_RoofTilesV2_AO', -900, 550, unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
+hg = sample('T_RoofTilesV2_Height', -900, 800, unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
+# Make Material Attributes is the only Python route to Displacement: unreal.MaterialProperty hides MP_Displacement
+# (cast by int or name fails, the MCP MaterialTools uses the same enum), and the editor-only input is protected.
+# It works under Substrate, verified 2026-09-24 on dense meshes; the earlier "lost" verdict came from 12-triangle cubes.
+# FR : Make Material Attributes est la seule voie Python vers Displacement ; l'echec d'avant venait des cubes a 12 triangles.
+mma = mel.create_material_expression(mat, unreal.MaterialExpressionMakeMaterialAttributes, -350, 200)
+for src, out, pin in ((bc, 'RGB', 'BaseColor'), (rg, 'R', 'Roughness'), (nm, 'RGB', 'Normal'), (ao, 'R', 'AmbientOcclusion'), (hg, 'R', 'Displacement')):
+    assert mel.connect_material_expressions(src, out, mma, pin), pin
+mat.set_editor_property('use_material_attributes', True)
+assert mel.connect_material_property(mma, '', unreal.MaterialProperty.MP_MATERIAL_ATTRIBUTES)
+mat.set_editor_property('enable_tessellation', True)
+ds = mat.get_editor_property('displacement_scaling'); ds.magnitude = L['disp_cm']; ds.center = L['disp_center']
+mat.set_editor_property('displacement_scaling', ds)
+mel.recompile_material(mat); eal.save_loaded_asset(mat)
+print('material', mpath)
+
+# 3. lookdev level
+les = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+if eal.does_asset_exist(LEVEL): les.load_level(LEVEL)
+else: les.new_level(LEVEL)
+eas = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+for a in eas.get_all_level_actors():
+    if a.get_actor_label().startswith('LD_'): eas.destroy_actor(a)
+MESHES = '/Game/ZenRayShards/Meshes/LookDev'
+# Nanite tessellation dices each source triangle only so far: a 2-triangle face never shows the tiles.
+# Dense meshes come from Houdini (Scripts/BuildLookDevDenseMeshes.py), 96 and 192 divisions, 2 m cube and 4 m plane.
+# FR : un maillage de 2 triangles par face ne se deplace jamais ; maillages denses exportes de Houdini.
+DENSE = '/Users/zenray/Create/Build/Productions/ZenRayShards/SourceAssets/LookDev'
+def nanite_import(name):
+    t = unreal.AssetImportTask(); t.filename = f'{DENSE}/{name}.fbx'; t.destination_path = MESHES; t.destination_name = name
+    t.automated = True; t.replace_existing = True; t.save = True
+    ui = unreal.FbxImportUI(); ui.import_materials = False; ui.import_textures = False; ui.import_animations = False
+    ui.static_mesh_import_data.combine_meshes = True; ui.static_mesh_import_data.set_editor_property('build_nanite', True)
+    t.options = ui; tools.import_asset_tasks([t])
+    m = eal.load_asset(f'{MESHES}/{name}'); ns = m.get_editor_property('nanite_settings'); ns.enabled = True
+    m.set_editor_property('nanite_settings', ns); eal.save_loaded_asset(m)
+    return f'{MESHES}/{name}'
+def mesh(label, path, loc, scale):
+    a = eas.spawn_actor_from_object(eal.load_asset(path), unreal.Vector(*loc))
+    a.set_actor_label(label); a.set_actor_scale3d(unreal.Vector(*scale))
+    a.static_mesh_component.set_material(0, mat); return a
+mesh('LD_Cube', nanite_import('SM_LD_CubeDense'), (0, 0, 0), (1, 1, 1))  # dense cube pivot is at its base
+mesh('LD_Plane', nanite_import('SM_LD_PlaneDense'), (L['plane_x'], 0, 0), (1, 1, 1))
+sun = eas.spawn_actor_from_class(unreal.DirectionalLight, unreal.Vector(0, 0, 500), unreal.Rotator(0, L['sun_pitch'], L['sun_yaw']))
+sun.set_actor_label('LD_Sun'); sun.light_component.set_intensity(L['sun_lux'])
+sun.light_component.set_editor_property('atmosphere_sun_light', True)
+sky = eas.spawn_actor_from_class(unreal.SkyAtmosphere, unreal.Vector(0, 0, 0)); sky.set_actor_label('LD_SkyAtmosphere')
+sl = eas.spawn_actor_from_class(unreal.SkyLight, unreal.Vector(0, 0, 300)); sl.set_actor_label('LD_SkyLight')
+sl.light_component.set_editor_property('real_time_capture', True)
+# The project forbids static lighting (r.AllowStaticLighting=False): a Stationary light waits for a bake
+# that never happens and the scene stays black. / FR : sans eclairage precalcule, lumieres en Movable.
+# Fixed exposure: auto exposure keys on the black sky and burns the lit faces. / FR : exposition fixe pour le lookdev.
+ppv = eas.spawn_actor_from_class(unreal.PostProcessVolume, unreal.Vector(0, 0, 0)); ppv.set_actor_label('LD_PostProcess')
+ppv.set_editor_property('unbound', True)
+st = ppv.settings
+st.set_editor_property('override_auto_exposure_method', True); st.set_editor_property('auto_exposure_method', unreal.AutoExposureMethod.AEM_MANUAL)
+st.set_editor_property('override_auto_exposure_apply_physical_camera_exposure', True); st.set_editor_property('auto_exposure_apply_physical_camera_exposure', False)
+st.set_editor_property('override_auto_exposure_bias', True); st.set_editor_property('auto_exposure_bias', L['exposure_ev100'] - 11.0)
+ppv.set_editor_property('settings', st)
+for a in (sun, sl):
+    a.root_component.set_mobility(unreal.ComponentMobility.MOVABLE)
+les.save_current_level()
+print('level', LEVEL)
